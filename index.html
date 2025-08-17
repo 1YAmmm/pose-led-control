@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Teachable Machine Pose + ESP8266 Control</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+        #canvas {
+            margin-top: 10px;
+            border: 1px solid #ccc;
+        }
+        #label-container > div {
+            margin: 5px;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Teachable Machine Pose + ESP LED Control</h1>
+    <button onclick="init()">Start</button>
+    <div><canvas id="canvas"></canvas></div>
+    <div id="label-container"></div>
+
+    <!-- TensorFlow and Teachable Machine Pose Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
+    <script type="text/javascript">
+        const URL = "./my_model/"; // Path to your exported Teachable Machine model
+        const ESP_IP = "http://192.168.100.98"; // Replace with your ESP8266 IP address
+        const TRIGGER_CLASS = "Class 2"; // Replace with your actual pose class name
+        const CONFIDENCE_THRESHOLD = 0.90;
+
+        let model, webcam, ctx, labelContainer, maxPredictions;
+        let lastSent = "none";
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmPose.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            const size = 200;
+            webcam = new tmPose.Webcam(size, size, true); // width, height, flip
+            await webcam.setup();
+            await webcam.play();
+            window.requestAnimationFrame(loop);
+
+            const canvas = document.getElementById("canvas");
+            canvas.width = size;
+            canvas.height = size;
+            ctx = canvas.getContext("2d");
+
+            labelContainer = document.getElementById("label-container");
+            labelContainer.innerHTML = "";
+            for (let i = 0; i < maxPredictions; i++) {
+                labelContainer.appendChild(document.createElement("div"));
+            }
+        }
+
+        async function loop(timestamp) {
+            webcam.update();
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        async function predict() {
+            const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+            const prediction = await model.predict(posenetOutput);
+
+            let poseDetected = false;
+
+            for (let i = 0; i < maxPredictions; i++) {
+                const className = prediction[i].className;
+                const probability = prediction[i].probability;
+                labelContainer.childNodes[i].innerHTML = className + ": " + probability.toFixed(2);
+
+                if (className === TRIGGER_CLASS && probability > CONFIDENCE_THRESHOLD) {
+                    poseDetected = true;
+                }
+            }
+
+            if (poseDetected && lastSent !== "on") {
+                sendToESP("on");
+                lastSent = "on";
+            } else if (!poseDetected && lastSent !== "off") {
+                sendToESP("off");
+                lastSent = "off";
+            }
+
+            drawPose(pose);
+        }
+
+        function sendToESP(state) {
+            fetch(`${ESP_IP}/led/${state}`)
+                .then(response => console.log(`ESP LED ${state.toUpperCase()}`))
+                .catch(err => console.error("ESP fetch error:", err));
+        }
+
+        function drawPose(pose) {
+            if (webcam.canvas) {
+                ctx.drawImage(webcam.canvas, 0, 0);
+                if (pose) {
+                    const minConfidence = 0.5;
+                    tmPose.drawKeypoints(pose.keypoints, minConfidence, ctx);
+                    tmPose.drawSkeleton(pose.keypoints, minConfidence, ctx);
+                }
+            }
+        }
+    </script>
+
+</body>
+</html>
